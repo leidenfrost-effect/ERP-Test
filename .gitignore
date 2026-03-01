@@ -1,6 +1,7 @@
 build/
 build-check/
 build-local/
+vcpkg_installed/
 .vscode/
 *.db
 *.sqlite
