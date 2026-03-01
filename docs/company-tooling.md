@@ -8,7 +8,8 @@ This project now includes a production-oriented tooling stack for engineering te
 - Health endpoint: `GET /health` and `GET /pb/health`
 - Metrics endpoint: `GET /metrics` (Prometheus format)
 - Structured access logs (JSON lines)
-- Request correlation header: `X-Request-Id`
+- Request/trace headers: `X-Request-Id`, `X-Correlation-Id`, `traceparent`
+- Structured audit logs for write operations (`event=audit`)
 - Security headers:
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`

@@ -92,6 +92,10 @@ cmake --build build
 - Operational docs:
   - `docs/company-tooling.md`
   - `docs/operations-runbook.md`
+  - `docs/quality-gates.md`
+  - `docs/sbom.md`
+  - `docs/observability.md`
+  - `docs/audit-logging.md`
 
 ## Run API
 
@@ -303,13 +307,21 @@ API logs are emitted as structured JSON lines (one line per request), including:
 - `ts_ms`
 - `level`
 - `event`
+- `correlation_id`
+- `trace_id`
 - `method`
 - `path`
 - `status`
 - `duration_ms`
 - `request_id`
 
-Each response includes `X-Request-Id` for cross-service tracing.
+Each response includes:
+
+- `X-Request-Id`
+- `X-Correlation-Id`
+- `traceparent`
+
+Write operations also emit `event=audit` entries (see `docs/audit-logging.md`).
 
 ## Tests
 

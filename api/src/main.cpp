@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <functional>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -58,6 +60,7 @@ struct Metrics {
 
 Metrics g_metrics;
 std::atomic<std::uint64_t> g_request_sequence{0};
+std::atomic<std::uint64_t> g_trace_sequence{0};
 
 std::string Trim(const std::string& value) {
   const auto first = value.find_first_not_of(" \t\n\r");
@@ -292,13 +295,17 @@ void LogAccess(
   const crow::request& request,
   const int status,
   const std::int64_t duration_ms,
-  const std::string& request_id) {
+  const std::string& request_id,
+  const std::string& correlation_id,
+  const std::string& trace_id) {
   const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch())
                         .count();
 
   std::cout << "{\"ts_ms\":" << now_ms << ",\"level\":\"INFO\",\"event\":\"http_access\""
             << ",\"request_id\":\"" << EscapeJson(request_id) << "\""
+            << ",\"correlation_id\":\"" << EscapeJson(correlation_id) << "\""
+            << ",\"trace_id\":\"" << EscapeJson(trace_id) << "\""
             << ",\"method\":\"" << HttpMethodToString(request.method) << "\""
             << ",\"path\":\"" << EscapeJson(request.url) << "\""
             << ",\"status\":" << status
@@ -329,6 +336,215 @@ std::string ResolveRequestId(const crow::request& request) {
   return std::to_string(now_ms) + "-" + std::to_string(seq);
 }
 
+std::string ToLower(const std::string& value) {
+  std::string lowered = value;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return lowered;
+}
+
+std::string ToHexFixed(const std::uint64_t value, const std::size_t width) {
+  std::ostringstream out;
+  out << std::hex << std::nouppercase << std::setfill('0') << std::setw(static_cast<int>(width)) << value;
+  auto rendered = out.str();
+  if (rendered.size() > width) {
+    rendered = rendered.substr(rendered.size() - width);
+  }
+  return rendered;
+}
+
+bool IsHexChar(const char c) {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+bool IsHexRange(const std::string& value, const std::size_t start, const std::size_t length) {
+  if (start + length > value.size()) {
+    return false;
+  }
+
+  for (std::size_t i = start; i < start + length; ++i) {
+    if (!IsHexChar(value[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsZeroHex(const std::string& value) {
+  return std::all_of(value.begin(), value.end(), [](const char c) { return c == '0'; });
+}
+
+bool IsValidTraceparent(const std::string& traceparent) {
+  // W3C traceparent: version(2)-trace_id(32)-span_id(16)-flags(2)
+  if (traceparent.size() != 55) {
+    return false;
+  }
+  if (traceparent[2] != '-' || traceparent[35] != '-' || traceparent[52] != '-') {
+    return false;
+  }
+  if (!IsHexRange(traceparent, 0, 2) || !IsHexRange(traceparent, 3, 32) ||
+      !IsHexRange(traceparent, 36, 16) || !IsHexRange(traceparent, 53, 2)) {
+    return false;
+  }
+  return true;
+}
+
+std::string ExtractTraceId(const std::string& traceparent) {
+  if (!IsValidTraceparent(traceparent)) {
+    return "";
+  }
+  return ToLower(traceparent.substr(3, 32));
+}
+
+std::string ResolveCorrelationId(const crow::request& request, const std::string& request_id) {
+  auto incoming = Trim(request.get_header_value("X-Correlation-Id"));
+  if (incoming.empty()) {
+    return request_id;
+  }
+  if (incoming.size() > 128) {
+    incoming = incoming.substr(0, 128);
+  }
+  return incoming;
+}
+
+std::string GenerateTraceparent(const std::string& seed) {
+  const auto seq = g_trace_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+  const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+
+  const auto stable_seed = seed + ":" + std::to_string(now_ns) + ":" + std::to_string(seq);
+  const auto hash_a = static_cast<std::uint64_t>(std::hash<std::string>{}(stable_seed));
+  const auto hash_b = static_cast<std::uint64_t>(std::hash<std::string>{}(stable_seed + ":trace"));
+  const auto span_hash = static_cast<std::uint64_t>(std::hash<std::string>{}(stable_seed + ":span"));
+
+  std::string trace_id = ToHexFixed(hash_a, 16) + ToHexFixed(hash_b, 16);
+  std::string span_id = ToHexFixed(span_hash, 16);
+
+  if (IsZeroHex(trace_id)) {
+    trace_id.back() = '1';
+  }
+  if (IsZeroHex(span_id)) {
+    span_id.back() = '1';
+  }
+
+  return "00-" + ToLower(trace_id) + "-" + ToLower(span_id) + "-01";
+}
+
+std::string ResolveTraceparent(
+  const crow::request& request,
+  const std::string& request_id,
+  const std::string& correlation_id) {
+  const auto incoming = Trim(request.get_header_value("traceparent"));
+  if (IsValidTraceparent(incoming)) {
+    return ToLower(incoming);
+  }
+  return GenerateTraceparent(request_id + ":" + correlation_id + ":" + request.url);
+}
+
+std::string ResolveAuditActor(const crow::request& request) {
+  const std::string authorization = request.get_header_value("Authorization");
+  const std::string bearer_prefix = "Bearer ";
+  if (authorization.rfind(bearer_prefix, 0) != 0) {
+    return "anonymous";
+  }
+
+  const auto token = Trim(authorization.substr(bearer_prefix.size()));
+  if (token.empty()) {
+    return "anonymous";
+  }
+  return "token:" + ToHexFixed(static_cast<std::uint64_t>(std::hash<std::string>{}(token)), 16);
+}
+
+bool IsWriteMethod(const crow::HTTPMethod method) {
+  return method == crow::HTTPMethod::Post || method == crow::HTTPMethod::Put ||
+         method == crow::HTTPMethod::Patch || method == crow::HTTPMethod::Delete;
+}
+
+std::string AuditAction(const crow::HTTPMethod method) {
+  switch (method) {
+    case crow::HTTPMethod::Post:
+      return "CREATE";
+    case crow::HTTPMethod::Put:
+    case crow::HTTPMethod::Patch:
+      return "UPDATE";
+    case crow::HTTPMethod::Delete:
+      return "DELETE";
+    default:
+      return "WRITE";
+  }
+}
+
+std::vector<std::string> SplitPathSegments(const std::string& raw_url) {
+  std::string path = raw_url;
+  if (const auto query_start = path.find('?'); query_start != std::string::npos) {
+    path = path.substr(0, query_start);
+  }
+
+  std::vector<std::string> segments;
+  std::string current;
+  for (const char c : path) {
+    if (c == '/') {
+      if (!current.empty()) {
+        segments.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(c);
+  }
+  if (!current.empty()) {
+    segments.push_back(std::move(current));
+  }
+  return segments;
+}
+
+std::pair<std::string, std::string> ResolveAuditResource(const std::string& raw_url) {
+  auto segments = SplitPathSegments(raw_url);
+  if (segments.empty()) {
+    return { "root", "" };
+  }
+
+  std::size_t idx = 0;
+  if (segments[0] == "pb" && segments.size() > 1) {
+    idx = 1;
+  }
+
+  const std::string resource_type = segments[idx];
+  std::string resource_id;
+  if (segments.size() > idx + 1 && segments[idx + 1] != "movements") {
+    resource_id = segments[idx + 1];
+  }
+  return { resource_type, resource_id };
+}
+
+void LogAuditEvent(
+  const crow::request& request,
+  const int status,
+  const std::string& request_id,
+  const std::string& correlation_id,
+  const std::string& trace_id) {
+  if (!IsWriteMethod(request.method) || status < 200 || status >= 300) {
+    return;
+  }
+
+  const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+  const auto resource = ResolveAuditResource(request.url);
+
+  std::cout << "{\"ts_ms\":" << now_ms << ",\"level\":\"INFO\",\"event\":\"audit\""
+            << ",\"request_id\":\"" << EscapeJson(request_id) << "\""
+            << ",\"correlation_id\":\"" << EscapeJson(correlation_id) << "\""
+            << ",\"trace_id\":\"" << EscapeJson(trace_id) << "\""
+            << ",\"action\":\"" << EscapeJson(AuditAction(request.method)) << "\""
+            << ",\"resource_type\":\"" << EscapeJson(resource.first) << "\""
+            << ",\"resource_id\":\"" << EscapeJson(resource.second) << "\""
+            << ",\"actor\":\"" << EscapeJson(ResolveAuditActor(request)) << "\""
+            << ",\"status\":" << status << "}" << std::endl;
+}
+
 crow::response FinalizeResponse(
   const crow::request& request,
   crow::response response,
@@ -336,14 +552,22 @@ crow::response FinalizeResponse(
   const std::string& request_id,
   const core::Error* error = nullptr) {
   ApplySecurityHeaders(&response);
+
+  const auto correlation_id = ResolveCorrelationId(request, request_id);
+  const auto traceparent = ResolveTraceparent(request, request_id, correlation_id);
+  const auto trace_id = ExtractTraceId(traceparent);
+
   response.set_header("X-Request-Id", request_id);
+  response.set_header("X-Correlation-Id", correlation_id);
+  response.set_header("traceparent", traceparent);
 
   const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - started)
                              .count();
 
   RecordMetrics(response.code, duration_ms, error);
-  LogAccess(request, response.code, duration_ms, request_id);
+  LogAccess(request, response.code, duration_ms, request_id, correlation_id, trace_id);
+  LogAuditEvent(request, response.code, request_id, correlation_id, trace_id);
   return response;
 }
 

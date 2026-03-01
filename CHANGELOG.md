@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 
 ## [Unreleased]
+- Added P3 observability + audit baseline:
+  - API now emits `X-Correlation-Id` and W3C `traceparent` headers.
+  - Access logs now include `correlation_id` and `trace_id`.
+  - Successful write operations emit structured `event=audit` logs.
+  - Added audit schema: `security/audit-event.schema.json`.
+  - Added docs: `docs/observability.md`, `docs/audit-logging.md`.
 - Added P2 quality-gate baseline:
   - `ops/scan_all.sh`, `ops/quality_gate.sh`, `ops/gen_sbom.sh`
   - `ops/contract_test.sh`, `ops/gen_client.sh`, `ops/install_tools.md`
