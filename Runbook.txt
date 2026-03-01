@@ -1,0 +1,504 @@
+﻿Hybrid ERP Uygulamanız İçin Codex/CLI Runbook’u
+Kurumsal ürünleşmeye giden yolda otomatik güvenlik/teknik tarama → geliştirici görevleri üretme → SSO/OAuth2+PKCE, RBAC, OpenAPI, audit logging, SBOM, OpenTelemetry, offline caching adımlarını kopyala‑yapıştır çalıştırılabilir prompt/komut bloklarıyla uçtan uca uygular.
+Yönetici özeti
+Ekran görüntüleriniz iki kritik olgunluk boşluğunu net gösteriyor: (i) istemci tarafında API Base URL + opsiyonel Bearer token ile “debug/PoC” seviyesinde oturum yaklaşımı, (ii) “Ürün Kataloğu” ekranında 404 Not Found → JSON parse (FormatException) hatası; yani istemcinin non‑JSON yanıtı JSON sanıp parse etmesi ve/veya endpoint sözleşmesinin belirsizliği. Bu tip hataları kalıcı olarak çözmenin en hızlı yolu OpenAPI sözleşmesi (design/contract-first) + otomatik contract test + typed client kombinasyonudur. OpenAPI, HTTP API’lerini dil bağımsız şekilde tanımlayan standarttır ve spec’in kendisi, bu tanımın kod üretimi ve test gibi kullanım alanlarını hedeflediğini açıkça belirtir. [1]
+Kimlik tarafında, mobil/native uygulamalar için yetkilendirme isteklerinin harici kullanıcı aracısı (sistem tarayıcısı) üzerinden yapılması (embedded webview yerine) RFC 8252’nin önerdiği “best practice”tir. [2] Authorization Code akışının mobilde güvenli uygulanması için PKCE (RFC 7636) kullanımı, “authorization code interception” riskine karşı temel mitigasyondur. [3]
+Kurumsal ürünleşmeyi “süreç” tarafında kalıcı kılmak için NIST SSDF (SP 800‑218) pratiklerini sprint kalite kapısı olarak bağlamak; mobil güvenlikte OWASP MASVS, backend/web’de OWASP ASVS ve API’lerde OWASP API Security Top 10 (özellikle Broken Object Level Authorization / IDOR) kontrollerini otomasyona dönüştürmek gerekir. [4]
+Kapsam, ekranlardan gözlemler ve belirsizler
+Aşağıdaki iki ekran, runbook’un neden bu sırayla tasarlandığını gösteriyor.
+Giriş ekranı: API Base URL + opsiyonel Bearer Token
+
+Bu giriş yaklaşımı geliştirmede hızlıdır; fakat üretimde kullanıcıya URL/token verdirme, yanlış ortam/zararlı endpoint, token sızıntısı, KVKK kapsamındaki erişim loglarının güvenilmezliği gibi riskler doğurur. KVKK’nın amacı kişisel verileri korumaktır; İK modülü gibi alanlar bu kapsamı doğrudan tetikler. [5]
+Ürün Kataloğu: 404 Not Found → FormatException
+
+Bu hata tipi genelde şu kök sebeplere işaret eder: (i) endpoint gerçekten yok / yanlış base path, (ii) reverse proxy route, (iii) auth middleware 404/HTML döndürüyor, (iv) istemci “content-type” kontrol etmeden JSON decode ediyor. Bu runbook önce sözleşme ve test kurar, sonra kimlik + RBAC + audit ekler.
+Belirsiz (unspecified) detaylarda, runbook her adımda “algıla‑uyarla” çalışır. Aşağıdaki tabloda compact alternatifler var.
+Belirsiz alanDurumOpsiyonlar (2–3)NotMobil istemci teknolojisiunspecified (ekran hatası Dart’a benziyor)Flutter (Dart), React Native, Ionic/Capacitor“FormatException … Unexpected character” mesajı Flutter/Dart JSON parse pattern’ine benzer (yine de kesin değil).Backendunspecified.NET Web API, Node/Express, Java Spring Boot, Python FastAPIOpenAPI çıkarma stratejisi stack’e göre değişir.VeritabanıunspecifiedPostgreSQL, MSSQL, MySQLAudit/RBAC migration script’leri DB’ye göre adapte edilir.CI sağlayıcısıunspecifiedGitHub Actions, GitLab CI, Azure DevOpsPipeline snippet’leri alternatifli verildi.Kimlik sağlayıcı (IdP)unspecifiedKeycloak, Azure AD / Entra ID, Auth0OAuth2 standardı aynı; konfig detayları IdP’ye göre değişir. [6]KVKK/GDPR notu: KVKK aydınlatma yükümlülüğü; kişisel verisi işlenen kişiye “kim, hangi amaçla, hangi hukuki sebeple, kimlere aktarım” bilgisinin verilmesini çerçeveler. [7] GDPR Madde 5 ilkeleri (amaçla sınırlılık, veri minimizasyonu, saklama sınırlaması vb.) özellikle loglama/audit ve telemetry’de veri kapsamını sınırlar. [8]
+Otomatik tarama ve görev üretimi için kopyala‑yapıştır prompt seti
+Aşağıdaki bloklar iki parçalı ilerler:
+Birincisi Terminal/CLI komutları (repo’da çalıştırılır), ikincisi Codex/ChatGPT prompt’u (kod/konfig üretir). Her prompt idempotent olacak şekilde “varsa güncelle, yoksa ekle; kırma; test çalıştır” mantığıyla yazdırılır.
+Başlangıç hazırlığı
+Amaç: tek bir dallanma altında otomasyonla ilerlemek, tarama çıktıları için standart klasör yapısını kurmak.
+Beklenen çıktı: ops/, artifacts/, docs/ klasörleri; temel .gitignore güncellemesi.
+Ön koşullar: repo root (unspecified), git kurulu.
+Güvenlik/uyumluluk: tarama çıktılarında token/PII sızıntısı olmasın; raporlar redakte edilsin (KVKK/GDPR veri minimizasyonu). [9]
+# Terminal (repo root)
+git status
+git checkout -b chore/secure-productization-baseline
+
+mkdir -p ops artifacts/security artifacts/tasks docs
+printf "\n# local artifacts\nartifacts/\n" >> .gitignore
+git add .gitignore
+git commit -m "chore: add artifacts ignore" || true
+[CODEX/CHATGPT PROMPT — Başlangıç]
+Repo root'ta çalışıyorsun. Amaç: güvenlik taramaları ve ürünleşme için temel klasör/konfig yapısını idempotent şekilde kurmak.
+Kurallar:
+- Var olan dosyaları kırma; gerekiyorsa minimum diff ile güncelle.
+- Yeni dosyaları ops/ docs/ araçlarını ve README'lerini ekle.
+- Secrets/PII loglama: örneklerde redaction kullan.
+İş:
+1) ops/README.md oluştur: scan & task generation akışını anlat.
+2) docs/productization/ klasörü aç; "scope.md" (SSO, RBAC, OpenAPI, audit, SBOM, OTel, offline) hedeflerini yaz.
+3) artifacts/ klasörünün sadece lokal olduğunu belirt; CI'da artifact upload ayrı olacak.
+Çıktı: Oluşturulan/güncellenen dosya listesi + kısa açıklama.
+Stack envanteri ve otomatik algılama
+Amaç: “unspecified” alanları repo’dan algılayıp sonraki adımları doğru seçmek.
+Beklenen çıktı: artifacts/inventory.json, docs/tech-inventory.md.
+Ön koşullar: repo root; python3 veya node (unspecified).
+Güvenlik/uyumluluk: envanter dosyası secrets içermemeli (sadece dosya adları/versiyonlar). NIST SSDF “geliştirme ortamı ve süreçte güvenlik pratikleri” yaklaşımına uyumlu temel adım. [10]
+[CODEX/CHATGPT PROMPT — Envanter aracı]
+Repo root'tasın ve shell çalıştırabiliyorsun.
+Amaç: stack envanteri çıkaran idempotent bir araç yazmak.
+
+İş:
+1) ops/inventory.sh oluştur.
+   - pubspec.yaml, package.json, pom.xml, build.gradle, *.csproj, requirements.txt, pyproject.toml, Dockerfile, docker-compose*.yml, helm chart, terraform vb. var mı kontrol et.
+   - Bulduklarını JSON olarak artifacts/inventory.json'a yaz.
+2) ops/inventory.sh çalıştır; docs/tech-inventory.md oluştur (insan okunur özet).
+3) Eğer hiçbir stack dosyası bulunmazsa, "unspecified" olarak işaretle ve kullanıcıdan hangi stack olduğunu soracak bir not üret.
+
+Çıktı:
+- ops/inventory.sh
+- artifacts/inventory.json
+- docs/tech-inventory.md
+Çalıştırma:
+bash ops/inventory.sh
+sed -n '1,160p' docs/tech-inventory.md
+Güvenlik ve teknik tarama otomasyonu
+Amaç: SAST + secrets + SCA + basit API/HTTP sözleşme tutarlılığı check’leri almak; sonuçları makine okunur formatta toplamak.
+Beklenen çıktı:
+artifacts/security/semgrep.json, gitleaks.json, trivy.json, osv.json, summary.md.
+Ön koşullar: repo root; internet erişimi (vulnerability DB güncellemesi için); Docker opsiyonel.
+Güvenlik/uyumluluk: raporlar commit edilmez; gitleaks raporunda redaction tercih edilir. Gitleaks CLI’nin JSON/SARIF gibi rapor formatlarını desteklediği belirtilir. [11] Trivy filesystem scan; lock file’lardan bağımlılık zafiyetlerini tarar. [12] OSV‑Scanner çoklu ekosisteme (Dart dahil) destek verir. [13] Semgrep CLI ile yerel tarama yapılır. [14]
+[CODEX/CHATGPT PROMPT — Tek komutla tarama]
+Amaç: ops/scan_all.sh adlı idempotent tarama betiği yaz ve çalıştır.
+
+İstenen araçlar (yüklü değilse):
+- semgrep (CLI)
+- gitleaks
+- trivy
+- osv-scanner
+- jq (opsiyonel ama önerilir)
+
+İş:
+1) ops/scan_all.sh oluştur:
+   - artifacts/security dizinini oluştur
+   - semgrep scan (auto config) JSON çıktısı al: artifacts/security/semgrep.json
+   - gitleaks detect JSON (+redact) çıktısı al: artifacts/security/gitleaks.json
+   - trivy fs (vuln+secret) JSON çıktısı al: artifacts/security/trivy.json
+   - osv-scanner taraması JSON çıktısı al: artifacts/security/osv.json
+   - Her adım başarısızsa script tamamen durmasın; çıkış kodlarını özetlesin.
+2) ops/scan_all.sh sonunda artifacts/security/summary.md üret:
+   - bulgu sayıları
+   - en yaygın kategoriler
+   - "hedeflenen kurumsal kontroller" (SSO/RBAC/OpenAPI/audit/SBOM/OTel/offline) ile ilişkilendirilmiş kısa yorum
+3) ops/scan_all.sh idempotent olsun (aynı dosyaları overwrite edebilir ama format stabil kalsın).
+4) tools kurulumu için ops/install_tools.md üret (OS bağımsız öneriler + Docker ile çalışma).
+
+Çıktı:
+- ops/scan_all.sh
+- ops/install_tools.md
+- artifacts/security/*.json
+- artifacts/security/summary.md
+Çalıştırma:
+bash ops/scan_all.sh
+sed -n '1,200p' artifacts/security/summary.md
+Tarama bulgularından geliştirici görevleri üretme
+Amaç: tarama sonuçlarını doğrudan sprint backlog’una çevirmek; “fix” işleri atomik ve ölçülebilir olsun.
+Beklenen çıktı: artifacts/tasks/backlog.md, artifacts/tasks/issues.csv, opsiyonel GitHub Issue oluşturma komutları.
+Ön koşullar: artifacts/security/*.json var; issue sistemi unspecified.
+Güvenlik/uyumluluk: issue’lara hassas veri kopyalanmaz; sadece dosya yolu + rule id + kısa açıklama. KVKK/GDPR veri minimizasyonu burada özellikle önemli. [9]
+[CODEX/CHATGPT PROMPT — Backlog üretici]
+Amaç: tarama JSON'larından görev çıkartan bir araç üret.
+
+İş:
+1) ops/generate_tasks_from_scans.py (Python) oluştur:
+   - Girdi: artifacts/security/semgrep.json, gitleaks.json, trivy.json, osv.json (varsa)
+   - Çıktı: artifacts/tasks/backlog.md ve artifacts/tasks/issues.csv
+   - Görev formatı:
+     - Title (kısa)
+     - Severity (Critical/High/Medium/Low)
+     - Category (SAST/Secrets/SCA/Config/API)
+     - Affected path
+     - Suggested fix (1-3 madde)
+     - Acceptance criteria (test/scan exit)
+2) "Known issue": Ürün Kataloğu ekranında 404->JSON parse hatasını ayrı bir "P0 bug" olarak ekle:
+   - İstemci: content-type kontrolü + non-2xx body parse etme
+   - Backend: endpoint route + OpenAPI sözleşmesi + contract test
+3) Opsiyonel: Eğer repo GitHub ise gh CLI ile issue açmak için ops/github_create_issues.sh şablonu üret (token sormadan; kullanıcı kendi ayarlasın).
+4) Çıktıları üretmek için komutları docs/ içinde yaz.
+
+Çıktı:
+- ops/generate_tasks_from_scans.py
+- artifacts/tasks/backlog.md
+- artifacts/tasks/issues.csv
+- (opsiyonel) ops/github_create_issues.sh
+Çalıştırma:
+python3 ops/generate_tasks_from_scans.py
+sed -n '1,200p' artifacts/tasks/backlog.md
+Kurumsal ürünleşme adımlarını uygulayan kopyala‑yapıştır prompt seti
+Bu bölümde her adım “sözleşme + kimlik + yetki + denetim + tedarik zinciri + gözlemlenebilirlik + offline” şeklinde sıralanır. Kimlik için temel referans: OAuth 2.0 çerçevesi (RFC 6749) [15]; native uygulamalarda OAuth kullanım yönlendirmesi RFC 8252 [2]; PKCE RFC 7636 [3].
+OpenAPI sözleşmesi ve typed client üretimi
+Amaç: endpoint belirsizliğini bitirmek; 404→FormatException türü hataları sözleşme/test ile daha erken yakalamak.
+Beklenen çıktı:
+openapi/openapi.yaml (veya openapi.json), docs/api/, clients/mobile_api_client/ (örnek).
+Ön koşullar: backend stack unspecified; OpenAPI mevcut değilse “design-first”.
+Güvenlik/uyumluluk: OpenAPI örnek payload’larda PII kullanma (KVKK/GDPR minimizasyon). [9]
+Kaynak notu: OpenAPI 3.1.1 resmi spec, OpenAPI description’ın dokümantasyon/kod üretimi/test amaçlı kullanılabileceğini ifade eder. [1] OpenAPI Generator CLI kurulumu resmi dokümantasyonda anlatılır. [16]
+[CODEX/CHATGPT PROMPT — OpenAPI sözleşme üretimi]
+Amaç: OpenAPI sözleşmesini üret ve CI'ya bağla.
+
+İş:
+1) Repo'da OpenAPI var mı ara:
+   - openapi.*, swagger.*, /docs/api.*, /src/**/OpenApi*.*
+2) Yoksa: openapi/openapi.yaml oluştur (OAS 3.1.x):
+   - Modüller: auth, HR/personnel, budget, operations (orders, products, BOM, inventory)
+   - En az 1 örnek endpoint "products list" ve "create product" koy (404 hatasının kök alanı)
+   - Responses: 200/400/401/403/404/500 açık
+   - content-type: application/json
+3) Varsa: mevcut spec'i normalize et (server URL, auth scheme, tags).
+4) "Contract test" için ops/contract_test.sh oluştur:
+   - Schemathesis ile OpenAPI'den test üretip API'yı çalıştırarak koş (API URL env ile verilecek).
+5) Eğer repo'da mobile client varsa:
+   - OpenAPI Generator ile typed client üretmek için ops/gen_client.sh ekle.
+   - Çıktı dizini: clients/mobile_api_client (stack doğrultusunda: Dart/TS/C#).
+6) docs/api/README.md oluştur: development workflow.
+
+Çıktı:
+- openapi/openapi.yaml (veya mevcut güncelleme)
+- ops/contract_test.sh
+- ops/gen_client.sh
+- docs/api/README.md
+Çalıştırma (örnek):
+# OpenAPI Generator CLI kurulumu opsiyoneldir; detaylar own docs'ta.
+bash ops/gen_client.sh 2>/dev/null || true
+# Contract test için (API ayağa kalkmış olmalı)
+API_BASE_URL="http://127.0.0.1:18080" bash ops/contract_test.sh
+OAuth2 + PKCE ile SSO entegrasyonu
+Amaç: “manuel Bearer token” yaklaşımını kaldırıp kurumsal SSO’ya geçmek.
+Beklenen çıktı:
+Backend: auth/ modülü (JWT validation, jwks, scopes), OpenAPI securitySchemes güncellemesi.
+Mobil: OAuth2+PKCE login akışı, token saklama, refresh stratejisi.
+Ön koşullar: IdP unspecified; redirect URI ve client_id alınmış olmalı.
+Güvenlik/uyumluluk: Native apps için OAuth istekleri sistem tarayıcısı ile yapılmalı (RFC 8252). [2] PKCE kullanılmalı (RFC 7636). [3] KVKK/GDPR: token’lar kişisel veri içermez ama kullanıcı kimliği/claim’ler PII olabilir; loglara token yazılmaz. [9]
+[CODEX/CHATGPT PROMPT — OAuth2+PKCE uçtan uca]
+Amaç: Backend + mobilde OAuth2 Authorization Code + PKCE akışını kur.
+
+İş (repo stack'ine göre uyarlayarak yap):
+1) Backend:
+   - Bearer JWT doğrulaması ekle (issuer, audience, jwks URL).
+   - OpenAPI securitySchemes: type=http scheme=bearer bearerFormat=JWT.
+   - 401/403 standardize error response: { "error": { "code": "...", "message": "...", "correlationId": "..." } }
+2) Mobil (eğer Flutter/Dart ise):
+   - OAuth2+PKCE login (system browser) akışı örnekle.
+   - Token saklama: platform secure storage (Keychain/Keystore).
+   - API çağrılarında Authorization header otomatik ekle.
+   - Logout: token temizle + (varsa) end-session endpoint.
+3) "Debug login" (API Base URL + token) ekranını:
+   - sadece debug build'te göster (feature flag)
+   - prod build'te kapat
+4) Testler:
+   - Backend'de auth middleware unit testleri (valid/invalid token).
+   - Mobilde "token inject" unit test.
+
+Çıktı:
+- backend auth doğrulama kodu + testler
+- mobile OAuth2+PKCE örnek kodu + testler
+- OpenAPI güncellemesi
+Örnek Flutter OAuth2+PKCE istemci iskeleti (temsilî – repo’ya prompt ile entegre ettirin; gerçek paket/ayarlar stack’e göre değişir):
+// PSEUDO-CODE: OAuth2 Authorization Code + PKCE (native app best practice: system browser) [17]
+final authConfig = OAuthConfig(
+  issuer: "https://idp.example.com/realms/erp",
+  clientId: "nova-erp-mobile",
+  redirectUri: "com.nova.erp://auth/callback",
+  scopes: ["openid", "profile", "email", "erp.api"],
+);
+
+final result = await oauth.authorizeAndExchangeCode(
+  usePkce: true,
+  preferEphemeralSession: false,
+);
+
+await secureStorage.write("access_token", result.accessToken);
+await secureStorage.write("refresh_token", result.refreshToken);
+
+// API call wrapper
+Future<Response> getJson(String path) async {
+  final token = await secureStorage.read("access_token");
+  final res = await http.get(
+    Uri.parse("$baseUrl$path"),
+    headers: {"Authorization": "Bearer $token", "Accept": "application/json"},
+  );
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    // content-type kontrolü: 404/HTML gibi yanıtları JSON decode etmeyin
+    throw ApiException.fromHttp(res);
+  }
+  return res;
+}
+RBAC matrisi ve nesne seviyesinde yetkilendirme
+Amaç: menü/ekran bazlı izin + API’de object‑level authorization (IDOR) kontrolleri.
+Beklenen çıktı:
+security/rbac-matrix.yaml, backend policy middleware, migration scripts (RBAC tabloları).
+Ön koşullar: rol listesi unspecified (admin/operator/hr/finance vs.); veritabanı unspecified.
+Güvenlik/uyumluluk: OWASP API Security Top 10 2023, object id’lerin manipülasyonu ile yetkisiz erişim riskini vurgular; her ID ile veri çekilen fonksiyonda object‑level kontrol önerir. [18] En az ayrıcalık prensibi NIST kontrol kataloglarında temel bir ilkedir. [19] KVKK/GDPR: İK verileri özel nitelik barındırabilir; rol bazında erişim kısıtları belgelensin. [20]
+[CODEX/CHATGPT PROMPT — RBAC ve BOLA/IDOR kapatma]
+Amaç: RBAC matrisi + backend enforcement + migration.
+
+İş:
+1) security/rbac-matrix.yaml oluştur:
+   - Roles: admin, operator, hr, finance, warehouse (varsayılan; yoksa "unspecified-role-1..")
+   - Permissions: hr.person.read/write, budget.read/write, ops.orders.read/write, ops.products.read/write, bom.read/write, inventory.read/write, approvals.read/act
+   - Ekran/menü mapping: sol menü modülleri
+2) Backend:
+   - Authorization middleware: "hasPermission(permission)" + "canAccessObject(resourceType, resourceId)"
+   - Object-level check örneği:
+     - orderId ile gelen isteklerde order'ın tenant/company/user scope'u doğrulanır
+3) DB migration:
+   - roles, permissions, role_permissions, user_roles tabloları
+   - seeds: varsayılan roller ve izinler
+4) Test:
+   - IDOR testleri: kullanıcı A'nın kaynağına kullanıcı B erişemez (403)
+   - "policy unit tests"
+
+Çıktı:
+- security/rbac-matrix.yaml
+- backend authz enforcement kodu + testler
+- db/migrations/* (DB türüne göre)
+Audit logging şeması ve denetim izi
+Amaç: onaylar, bütçe güncellemeleri, stok hareketleri gibi kritik aksiyonlarda immutable audit trail.
+Beklenen çıktı:
+db/migrations/*audit*, security/audit-event.schema.json, backend audit middleware/interceptor, log rotasyonu/retention dokümanı.
+Ön koşullar: DB unspecified; log altyapısı unspecified.
+Güvenlik/uyumluluk: NIST log yönetimi rehberi, kurumsal log yönetimi altyapısı ve süreçlerinin önemini vurgular. [21] KVKK/GDPR: loglar kişisel veri içerebilir; minimizasyon + saklama süresi + erişim kontrolü şart (GDPR 5, KVKK aydınlatma ve Kanun kapsamı). [22]
+[CODEX/CHATGPT PROMPT — Audit log tasarımı]
+Amaç: Uygulama içi audit logging'i şema + DB + middleware ile kur.
+
+İş:
+1) security/audit-event.schema.json oluştur:
+   - event_id, timestamp, actor (user_id, roles), tenant/company_id
+   - action (CREATE/UPDATE/APPROVE/REJECT/DELETE)
+   - resource (type, id)
+   - change_summary (alan bazlı; PII redacted)
+   - correlation_id (trace ile bağlanacak)
+   - ip, user_agent (opsiyonel)
+2) db migration:
+   - audit_events tablosu (append-only)
+   - index: timestamp, tenant_id, resource_type+resource_id
+3) Backend:
+   - Middleware/interceptor: her write endpoint'te audit event üret
+   - Redaction: kişisel verileri maskele
+4) Test:
+   - Audit event her kritik işlemde oluşuyor mu?
+   - Redaction çalışıyor mu?
+5) docs/audit-logging.md:
+   - KVKK/GDPR minimizasyon + saklama süresi politikası (placeholder)
+   - erişim: sadece audit viewer rolü
+
+Çıktı:
+- security/audit-event.schema.json
+- db/migrations/*audit*
+- backend middleware + testler
+- docs/audit-logging.md
+SBOM üretimi ve CI/CD’ye bağlama
+Amaç: her release’te otomatik SBOM üretmek; tedarik zinciri şeffaflığı.
+Beklenen çıktı:
+sbom/ klasörü, CI pipeline adımı, artifacts/sbom/*.json (CycloneDX veya SPDX).
+Ön koşullar: CI provider unspecified; container kullanımı opsiyonel.
+Güvenlik/uyumluluk: NTIA SBOM minimum elements raporu SBOM’u yazılım bileşen ilişkilerini içeren “formal record” olarak tanımlar. [23] CISA SBOM rehberi SBOM’un oluşturulması/dağıtımı ve rol bazlı rehberlik sunar. [24] Syft, SPDX/CycloneDX gibi formatlarda SBOM üretimi destekler. [25]
+[CODEX/CHATGPT PROMPT — SBOM (Syft) + CI entegrasyonu]
+Amaç: SBOM üretimini standart hale getir.
+
+İş:
+1) ops/gen_sbom.sh oluştur:
+   - çıktı: artifacts/sbom/sbom.cdx.json (CycloneDX) ve artifacts/sbom/sbom.spdx.json (SPDX)
+   - Syft yoksa: Docker ile syft çalıştırma fallback'i ekle
+2) CI snippet üret:
+   - GitHub Actions workflow (primary)
+   - GitLab CI ve Azure DevOps için minimal alternatif snippet'ler docs/ci-sbom.md içine
+3) docs/sbom.md:
+   - SBOM ne, ne zaman üretilecek, nereye yüklenecek (artifact), release notlarına nasıl eklenecek.
+4) Güvenlik:
+   - SBOM'u public paylaşmadan önce lisans/komponent politikası uyarısı ekle.
+
+Çıktı:
+- ops/gen_sbom.sh
+- docs/sbom.md
+- docs/ci-sbom.md (3 CI opsiyonu)
+Örnek syft komutları (terminal):
+mkdir -p artifacts/sbom
+# Örnek: repo filesystem'den CycloneDX SBOM
+syft dir:. -o cyclonedx-json=artifacts/sbom/sbom.cdx.json
+# Örnek: SPDX JSON
+syft dir:. -o spdx-json=artifacts/sbom/sbom.spdx.json
+OpenTelemetry enstrümantasyonu ve korelasyon
+Amaç: istemci‑API‑DB zincirinde correlation/trace id ile hata analizi; audit event’leriyle bağ.
+Beklenen çıktı:
+backend OTel SDK init, OTLP exporter konfig, traceparent propagation, correlation id middleware; opsiyonel collector config.
+Ön koşullar: gözlemlenebilirlik backend’i unspecified; OTLP collector önerilir.
+Güvenlik/uyumluluk: OpenTelemetry, telemetry (traces/metrics/logs) üretme‑toplama‑export etmeye yönelik vendor‑neutral çerçevedir. [26] Enstrümantasyon kavramı ve yöntemleri OTel dokümanlarında tanımlanır. [27] Trace context propagation için W3C Trace Context standardı (traceparent/tracestate) temel HTTP header formatını tanımlar. [28] KVKK/GDPR: telemetry’de PII taşınmamalı; kullanıcı id yerine pseudonymous id veya hash tercih edilmeli. [9]
+[CODEX/CHATGPT PROMPT — OpenTelemetry + correlation + audit link]
+Amaç: Backend'e OpenTelemetry tracing ekle ve audit logging ile ilişkilendir.
+
+İş:
+1) Backend stack'ini algıla (Node/.NET/Java/Python):
+   - Uygun OpenTelemetry SDK init ekle
+   - OTLP exporter (endpoint env var)
+2) Middleware:
+   - Her request için correlation_id üret (varsa X-Correlation-Id'yi kabul et)
+   - W3C traceparent header'ını koru/forward et
+3) Audit event içine correlation_id + trace_id yaz
+4) docs/observability.md:
+   - local dev: OTEL_EXPORTER_OTLP_ENDPOINT örneği
+   - prod: sampling, PII policy (kvkk/gdpr)
+5) Test:
+   - correlation id header geri dönüyor mu?
+   - audit event trace id içeriyor mu?
+
+Çıktı:
+- backend OTel init + middleware + test
+- docs/observability.md
+Offline cache ve senkronizasyon kuyruğu
+Amaç: depo/stok/operasyon gibi modüllerde bağlantı dalgalanmalarında veri kaybı olmaması; “eventual sync”.
+Beklenen çıktı:
+mobilde local DB/cache katmanı, sync queue, conflict resolution politikası, offline mod testleri.
+Ön koşullar: mobil stack unspecified (Flutter/RN/Ionic).
+Güvenlik/uyumluluk: mobilde yerel depolama hassas olabilir; OWASP MASVS mobil güvenlik doğrulama standardı olarak kullanılmalıdır. [29] KVKK/GDPR: cihazda tutulan PII minimize edilmeli; at-rest encryption + remote wipe politikası düşünülmeli. [9]
+[CODEX/CHATGPT PROMPT — Offline-first veri katmanı + sync]
+Amaç: Mobil istemcide offline cache + sync queue uygulamak.
+
+İş:
+1) Mobil stack algıla:
+   - Flutter ise: SQLite tabanlı bir persistence katmanı (repository pattern)
+   - React Native ise: SQLite/WatermelonDB benzeri
+   - Ionic ise: IndexedDB/SQLite wrapper
+2) Tasarım:
+   - Entity cache: products, orders, inventory snapshots (TTL + ETag/If-None-Match opsiyonu)
+   - Write operations: "outbox" tablosu (queued mutations)
+   - Sync engine:
+     - online olunca FIFO replay
+     - 409 conflict için basit strateji: server-wins + kullanıcıya uyarı
+3) API:
+   - Mutations idempotency key header ekle (tekrar denemelerde çift yazmasın)
+4) Test:
+   - offline iken create/update → outbox’a düşüyor mu?
+   - online olunca sync oluyor mu?
+   - 404 / non-json durumda UI düzgün hata veriyor mu? (FormatException fix regression)
+
+Çıktı:
+- mobile persistence + sync code
+- tests
+- docs/offline-sync.md
+CI/CD kalite kapıları ve otomatik “fail” kriterleri
+Amaç: her PR’da minimum güvenlik ve kalite kontrolleri; regresyonları erken yakalamak.
+Beklenen çıktı: CI workflow/pipeline dosyaları; quality gate script.
+Ön koşullar: CI provider unspecified.
+Güvenlik/uyumluluk: SSDF “SDLC içine güvenliği entegre et” yaklaşımı. [30] OWASP ASVS web/app güvenlik gereksinimleri çerçevesi; MASVS mobil; API Top10 API riskleri. [31]
+[CODEX/CHATGPT PROMPT — CI quality gates]
+Amaç: PR bazlı pipeline'a scan + test + contract test + sbom + lint gate ekle.
+
+İş:
+1) Primary: GitHub Actions workflow üret:
+   - steps: inventory → unit tests → semgrep → gitleaks → trivy fs → osv-scanner → openapi lint (varsa) → schemathesis contract test (staging URL ile)
+   - artifacts upload: security/*.json, sbom/*.json
+   - failing rules: gitleaks any finding fail; high/critical vuln fail (threshold param)
+2) Alternatifler:
+   - GitLab CI ve Azure DevOps snippet'lerini docs/ci-alternatives.md içine koy
+3) ops/quality_gate.sh oluştur:
+   - tüm kontrolleri localde çalıştıran wrapper
+4) docs/quality-gates.md: acceptance kriterleri
+
+Çıktı:
+- .github/workflows/quality-gate.yml (veya mevcut CI'ya uygun)
+- ops/quality_gate.sh
+- docs/ci-alternatives.md
+- docs/quality-gates.md
+Sprint bazlı, ölçülebilir 12–16 haftalık yol haritası
+Aşağıdaki plan 2 haftalık sprintlerle 6–8 sprint aralığında yürür (toplam 12–16 hafta). Owner bilgisi verilmediği için unspecified bırakıldı.
+SprintMilestoneOwnerTeslimatlarÖlçülebilir kabul kriterleriSprint AEnvanter + tarama otomasyonuunspecifiedops/inventory, ops/scan_all, görev üreticiCI’da semgrep+gitleaks+trivy+osv çalışıyor; artifacts üretiliyor; backlog.md otomatik çıkarılıyor. [32]Sprint BOpenAPI sözleşmesi ve contract testunspecifiedopenapi.yaml, schemathesis test, typed client üretimi“products list/create” endpoint’leri OpenAPI’de; contract test pipeline’da çalışıyor; 404→FormatException bug için regresyon testi var. [33]Sprint COAuth2+PKCE ile SSOunspecifiedbackend JWT doğrulama, mobil PKCE login, debug token ekranı prod’da kapalıRFC 8252 uyumlu tarayıcı tabanlı auth; PKCE aktif; manuel token prod build’te yok. [17]Sprint DRBAC matrisi + object-level authunspecifiedrbac-matrix.yaml, policy middleware, IDOR testleriKritik kaynaklarda object‑level authorization var; negatif testlerde 403; OWASP API1 sınıfı risk azaltıldı. [18]Sprint EAudit logging + log yönetimiunspecifiedaudit schema, DB migration, middleware, retention dokümanıKritik işlemlerde audit event üretiliyor; PII redacted; log yönetimi prensipleri dokümante. [34]Sprint FSBOM + tedarik zinciri kontrolleriunspecifiedsyft SBOM script, CI artifactHer release/PR’da SBOM üretiliyor; NTIA minimum alanları kapsayacak veri alanları doğrulanıyor (format bazlı). [35]Sprint GOpenTelemetry + korelasyonunspecifiedOTel init, OTLP export, correlation id, docstraceparent propagation çalışıyor; audit event correlation/trace id içeriyor. [36]Sprint HOffline cache + sync hardeningunspecifiedlocal cache, outbox, conflict policy, offline testlerOffline create/update kaybolmuyor; online olunca senkron; non‑JSON hata handling stabil. [29]Her sprint sonrası kısa kalite kapısı checklist’i
+Bu checklist’i her sprint sonunda CI + lokal çalıştırın; “pass” olmadan sprint kapanmasın. Çerçeve referansları: NIST SSDF, OWASP MASVS/ASVS, OWASP API Top10. [4]
+Süreç ve kanıt (SSDF odaklı): NIST SSDF, güvenli geliştirme pratiklerinin SDLC’ye entegre edilmesini önerir; her sprintte “kanıt” üretin (scan raporları, test raporları, SBOM, threat notes). [30]
+Mobil (MASVS): kritik mobil kontroller (secure storage, transport security, jailbreak/root tespiti, logs) için en az bir regresyon testi veya manuel doğrulama kaydı. [29]
+Web/Backend (ASVS): authn/authz, input validation, error handling, logging maddeleri için kontrol listesi tick. [37]
+API (OWASP API Top 10): özellikle BOLA/IDOR ve broken auth riskleri için negatif test seti. [18]
+Kopyala‑yapıştır sprint sonu komutu:
+# Sprint Quality Gate (local)
+bash ops/quality_gate.sh
+python3 ops/generate_tasks_from_scans.py
+git diff --stat
+Diyagramlar ve mermaid şablonları
+Kurumsal ürünleşme akışını iki küçük mermaid diyagramıyla repo’ya koymanız (docs/architecture.md) hem onboarding hem denetim için güçlü kanıt üretir.
+İstenen mimari (mermaid):
+flowchart LR
+  subgraph Mobile
+    A[Hybrid Mobile Client] -->|OAuth2 Code+PKCE| I[IdP / SSO]
+    A -->|API Calls + Bearer JWT| B[API Gateway / Backend]
+    A -->|Offline Cache + Outbox| L[(Local DB)]
+  end
+
+  subgraph Backend
+    B --> C[RBAC/Policy Engine]
+    B --> D[(ERP DB)]
+    B --> E[Audit Events Store]
+    B -->|OTLP| O[OpenTelemetry Collector]
+  end
+
+  O --> Obs[(Tracing/Logging Backend)]
+İş akışı (tarama → görev → fix → gate):
+flowchart TD
+  S[ops/scan_all.sh] --> R[artifacts/security/*.json]
+  R --> T[ops/generate_tasks_from_scans.py]
+  T --> B[artifacts/tasks/backlog.md]
+  B --> Dev[Fix + Tests]
+  Dev --> Gate[ops/quality_gate.sh + CI]
+  Gate -->|pass| Merge[Merge/Release + SBOM]
+Not: OpenTelemetry’de trace context propagation için traceparent header’ı W3C Trace Context standardıyla tanımlanır; OTel dokümantasyonu da bu standardı referans alır. [38]
+Bu runbook’u repo’nuzda uyguladığınızda, hem ekranlarda görünen “404→FormatException” gibi kontrat kırılmalarını sistematik önlersiniz, hem de kurumsal satın alınabilirlik için kritik olan SSO/RBAC/audit/SBOM/OTel/offline kabiliyetlerini sprint sprint ölçülebilir şekilde üretirsiniz.
+
+[1] [33] OpenAPI Specification v3.1.1 - spec.openapis.org
+https://spec.openapis.org/oas/v3.1.1.html?utm_source=chatgpt.com
+[2] [17] RFC 8252: OAuth 2.0 for Native Apps
+https://www.rfc-editor.org/rfc/rfc8252?utm_source=chatgpt.com
+[3] RFC 7636: Proof Key for Code Exchange by OAuth Public Clients
+https://datatracker.ietf.org/doc/html/rfc7636?utm_source=chatgpt.com
+[4] [10] [30] SP 800-218, Secure Software Development Framework (SSDF) Version 1.1 ...
+https://csrc.nist.gov/pubs/sp/800/218/final?utm_source=chatgpt.com
+[5] [20] KİŞİSEL VERİLERİN KORUNMASI KANUNU Kanun : 6698 Kabul Tarihi - Mevzuat
+https://www.mevzuat.gov.tr/MevzuatMetin/1.5.6698.pdf?utm_source=chatgpt.com
+[6] [15] RFC 6749: The OAuth 2.0 Authorization Framework
+https://www.rfc-editor.org/rfc/rfc6749?utm_source=chatgpt.com
+[7] Aydınlatma Yükümlülüğü | Kişisel Verileri Koruma Kurumu - KVKK
+https://www.kvkk.gov.tr/Icerik/2033/Aydinlatma-Yukumlulugu-?utm_source=chatgpt.com
+[8] [9] [22] Regulation - 2016/679 - EN - gdpr - EUR-Lex
+https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng?utm_source=chatgpt.com
+[11] GitHub - gitleaks/gitleaks: Find secrets with Gitleaks
+https://github.com/gitleaks/gitleaks?utm_source=chatgpt.com
+[12] Filesystem - Trivy
+https://trivy.dev/docs/latest/guide/target/filesystem/?utm_source=chatgpt.com
+[13] GitHub - google/osv-scanner: Vulnerability scanner written in Go which ...
+https://github.com/google/osv-scanner?utm_source=chatgpt.com
+[14] [32] Local CLI scans | Semgrep
+https://semgrep.dev/docs/getting-started/cli?utm_source=chatgpt.com
+[16] CLI Installation - OpenAPI Generator
+https://openapi-generator.tech/docs/installation/?utm_source=chatgpt.com
+[18] OWASP Top 10 API Security Risks – 2023
+https://owasp.org/API-Security/editions/2023/en/0x11-t10/?utm_source=chatgpt.com
+[19] Security and Privacy Controls for Information Systems and ... - NIST
+https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r5.pdf?utm_source=chatgpt.com
+[21] [34] SP 800-92, Guide to Computer Security Log Management | CSRC
+https://csrc.nist.gov/pubs/sp/800/92/final?utm_source=chatgpt.com
+[23] [35] The Minimum Elements For a Software Bill of Materials (SBOM) | National ...
+https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom?utm_source=chatgpt.com
+[24] Software Bill of Materials (SBOM) - CISA
+https://www.cisa.gov/sbom?utm_source=chatgpt.com
+[25] Output Formats | Anchore Open Source
+https://oss.anchore.com/docs/guides/sbom/formats/?utm_source=chatgpt.com
+[26] Documentation - OpenTelemetry
+https://opentelemetry.io/docs/?utm_source=chatgpt.com
+[27] [36] Instrumentation - OpenTelemetry
+https://opentelemetry.io/docs/concepts/instrumentation/?utm_source=chatgpt.com
+[28] [38] Trace Context - World Wide Web Consortium (W3C)
+https://www.w3.org/TR/trace-context/?utm_source=chatgpt.com
+[29] OWASP MASVS - OWASP Mobile Application Security
+https://mas.owasp.org/MASVS/?utm_source=chatgpt.com
+[31] [37] OWASP Application Security Verification Standard (ASVS)
+https://owasp.org/www-project-application-security-verification-standard/?utm_source=chatgpt.com

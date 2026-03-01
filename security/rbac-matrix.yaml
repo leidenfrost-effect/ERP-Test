@@ -1,0 +1,34 @@
+version: 1
+permissions:
+  auth:
+    - auth.verify
+  persons:
+    - persons.read
+    - persons.write
+  products:
+    - products.read
+    - products.write
+  stock:
+    - stock.read
+    - stock.write
+  metrics:
+    - metrics.read
+
+roles:
+  admin:
+    - "*"
+  operator:
+    - auth.verify
+    - persons.read
+    - persons.write
+    - products.read
+    - stock.read
+    - stock.write
+  mobile:
+    - auth.verify
+    - persons.read
+    - products.read
+    - stock.read
+  observability:
+    - auth.verify
+    - metrics.read

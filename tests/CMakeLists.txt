@@ -1,0 +1,29 @@
+add_executable(test_core_validation
+  test_core_validation.cpp
+)
+target_link_libraries(test_core_validation PRIVATE core)
+add_test(NAME core_validation COMMAND test_core_validation)
+
+add_executable(test_sqlite_repo
+  test_sqlite_repo.cpp
+)
+target_link_libraries(test_sqlite_repo PRIVATE infra)
+add_test(NAME sqlite_repo_crud COMMAND test_sqlite_repo)
+
+add_executable(test_mapping_roundtrip
+  test_mapping_roundtrip.cpp
+)
+target_link_libraries(test_mapping_roundtrip PRIVATE infra person_proto)
+add_test(NAME mapping_roundtrip COMMAND test_mapping_roundtrip)
+
+add_executable(test_core_product_inventory
+  test_core_product_inventory.cpp
+)
+target_link_libraries(test_core_product_inventory PRIVATE core)
+add_test(NAME core_product_inventory COMMAND test_core_product_inventory)
+
+add_executable(test_sqlite_product_inventory
+  test_sqlite_product_inventory.cpp
+)
+target_link_libraries(test_sqlite_product_inventory PRIVATE infra)
+add_test(NAME sqlite_product_inventory COMMAND test_sqlite_product_inventory)

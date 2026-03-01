@@ -1,0 +1,18 @@
+build/
+build-check/
+build-local/
+.vscode/
+*.db
+*.sqlite
+*.sqlite3
+artifacts/
+
+mobile/.dart_tool/
+mobile/.idea/
+mobile/.packages
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+
+# Local secrets
+mytoken.txt

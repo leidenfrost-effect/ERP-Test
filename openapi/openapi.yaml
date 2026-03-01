@@ -1,0 +1,472 @@
+openapi: 3.1.0
+info:
+  title: Hybrid Person API
+  version: 1.1.0
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /ready:
+    get:
+      summary: Readiness check
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /auth/status:
+    get:
+      summary: Authentication mode status
+      responses:
+        "200":
+          description: Auth mode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /auth/verify:
+    get:
+      summary: Verify bearer token
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Authorized token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Metrics payload
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /persons:
+    get:
+      summary: List persons
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - in: query
+          name: q
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Person list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPersonsResponse"
+        "400":
+          description: Validation or parse error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPersonsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPersonsResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPersonsResponse"
+    post:
+      summary: Create person
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [person]
+              properties:
+                person:
+                  $ref: "#/components/schemas/PersonInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonResponse"
+        "400":
+          description: Validation or parse error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonResponse"
+  /products:
+    get:
+      summary: List products
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Product list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProductsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProductsResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProductsResponse"
+    post:
+      summary: Create product
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product]
+              properties:
+                product:
+                  $ref: "#/components/schemas/ProductInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductResponse"
+  /stock:
+    get:
+      summary: Get stock balance
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: productId
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: warehouseCode
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stock balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockBalanceResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockBalanceResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockBalanceResponse"
+  /stock/movements:
+    post:
+      summary: Post stock movement
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [movement]
+              properties:
+                movement:
+                  $ref: "#/components/schemas/StockMovementInput"
+      responses:
+        "201":
+          description: Updated balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockBalanceResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockBalanceResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockBalanceResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-token
+  schemas:
+    ApiError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: string
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        error:
+          $ref: "#/components/schemas/ApiError"
+    Person:
+      type: object
+      properties:
+        id:
+          type: integer
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        age:
+          type: integer
+    PersonInput:
+      type: object
+      required: [firstName, lastName, email, age]
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        age:
+          type: integer
+    PersonResponse:
+      type: object
+      properties:
+        person:
+          $ref: "#/components/schemas/Person"
+        error:
+          $ref: "#/components/schemas/ApiError"
+    ListPersonsResponse:
+      type: object
+      properties:
+        persons:
+          type: array
+          items:
+            $ref: "#/components/schemas/Person"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+        query:
+          type: string
+        error:
+          $ref: "#/components/schemas/ApiError"
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        sku:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        defaultUom:
+          type: string
+        productType:
+          type: string
+        isStockTracked:
+          type: boolean
+        safetyStock:
+          type: integer
+        reorderPoint:
+          type: integer
+    ProductInput:
+      type: object
+      required: [sku, name, category, defaultUom, productType]
+      properties:
+        sku:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        defaultUom:
+          type: string
+        productType:
+          type: string
+        isStockTracked:
+          type: boolean
+        safetyStock:
+          type: integer
+        reorderPoint:
+          type: integer
+    ProductResponse:
+      type: object
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        error:
+          $ref: "#/components/schemas/ApiError"
+    ListProductsResponse:
+      type: object
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+        query:
+          type: string
+        error:
+          $ref: "#/components/schemas/ApiError"
+    StockMovementInput:
+      type: object
+      required: [productId, warehouseCode, movementType, quantity, reason]
+      properties:
+        productId:
+          type: integer
+        warehouseCode:
+          type: string
+        movementType:
+          type: string
+        quantity:
+          type: integer
+        reason:
+          type: string
+    StockBalance:
+      type: object
+      properties:
+        productId:
+          type: integer
+        warehouseCode:
+          type: string
+        onHand:
+          type: integer
+        reserved:
+          type: integer
+        available:
+          type: integer
+        belowReorderPoint:
+          type: boolean
+    StockBalanceResponse:
+      type: object
+      properties:
+        balance:
+          $ref: "#/components/schemas/StockBalance"
+        error:
+          $ref: "#/components/schemas/ApiError"

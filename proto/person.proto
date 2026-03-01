@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+package hybrid.people.v1;
+
+message ApiError {
+  string code = 1;
+  string message = 2;
+  repeated string details = 3;
+}
+
+message HealthResponse {
+  string status = 1;
+  ApiError error = 2;
+}
+
+message Person {
+  int64 id = 1;
+  string first_name = 2;
+  string last_name = 3;
+  string email = 4;
+  int32 age = 5;
+}
+
+message PersonInput {
+  string first_name = 1;
+  string last_name = 2;
+  string email = 3;
+  int32 age = 4;
+}
+
+message ListPersonsResponse {
+  repeated Person persons = 1;
+  ApiError error = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int64 total = 5;
+  string query = 6;
+}
+
+message GetPersonResponse {
+  Person person = 1;
+  ApiError error = 2;
+}
+
+message CreatePersonRequest {
+  PersonInput person = 1;
+}
+
+message CreatePersonResponse {
+  Person person = 1;
+  ApiError error = 2;
+}
+
+message UpdatePersonRequest {
+  PersonInput person = 1;
+}
+
+message UpdatePersonResponse {
+  Person person = 1;
+  ApiError error = 2;
+}
+
+message DeletePersonResponse {
+  bool deleted = 1;
+  ApiError error = 2;
+}
+
+enum ProductType {
+  PRODUCT_TYPE_UNSPECIFIED = 0;
+  PRODUCT_TYPE_FINISHED = 1;
+  PRODUCT_TYPE_SEMI = 2;
+  PRODUCT_TYPE_RAW = 3;
+}
+
+message Product {
+  int64 id = 1;
+  string sku = 2;
+  string name = 3;
+  string category = 4;
+  string default_uom = 5;
+  ProductType product_type = 6;
+  bool is_stock_tracked = 7;
+  int32 safety_stock = 8;
+  int32 reorder_point = 9;
+}
+
+message ProductInput {
+  string sku = 1;
+  string name = 2;
+  string category = 3;
+  string default_uom = 4;
+  ProductType product_type = 5;
+  bool is_stock_tracked = 6;
+  int32 safety_stock = 7;
+  int32 reorder_point = 8;
+}
+
+message ListProductsResponse {
+  repeated Product products = 1;
+  ApiError error = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int64 total = 5;
+  string query = 6;
+}
+
+message GetProductResponse {
+  Product product = 1;
+  ApiError error = 2;
+}
+
+message CreateProductRequest {
+  ProductInput product = 1;
+}
+
+message CreateProductResponse {
+  Product product = 1;
+  ApiError error = 2;
+}
+
+message UpdateProductRequest {
+  ProductInput product = 1;
+}
+
+message UpdateProductResponse {
+  Product product = 1;
+  ApiError error = 2;
+}
+
+message DeleteProductResponse {
+  bool deleted = 1;
+  ApiError error = 2;
+}
+
+enum StockMovementType {
+  STOCK_MOVEMENT_TYPE_UNSPECIFIED = 0;
+  STOCK_MOVEMENT_TYPE_RECEIPT = 1;
+  STOCK_MOVEMENT_TYPE_ISSUE = 2;
+  STOCK_MOVEMENT_TYPE_ADJUSTMENT = 3;
+}
+
+message StockBalance {
+  int64 product_id = 1;
+  string warehouse_code = 2;
+  int64 on_hand = 3;
+  int64 reserved = 4;
+  int64 available = 5;
+  bool below_reorder_point = 6;
+}
+
+message GetStockBalanceResponse {
+  StockBalance balance = 1;
+  ApiError error = 2;
+}
+
+message StockMovementInput {
+  int64 product_id = 1;
+  string warehouse_code = 2;
+  StockMovementType movement_type = 3;
+  int64 quantity = 4;
+  string reason = 5;
+}
+
+message PostStockMovementRequest {
+  StockMovementInput movement = 1;
+}
+
+message PostStockMovementResponse {
+  StockBalance balance = 1;
+  ApiError error = 2;
+}
